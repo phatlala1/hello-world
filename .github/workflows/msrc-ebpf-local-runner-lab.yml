@@ -1,0 +1,168 @@
+name: MSRC eBPF local runner boundary lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "all, run_a, run_b, or oidc_priv"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - run_a
+          - run_b
+          - oidc_priv
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  local-runner-boundary-lab:
+    runs-on: [self-hosted, Windows, X64, msrc-ebpf-lab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Prepare evidence directory
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\msrc_lab_evidence" | Out-Null
+          "mode=${{ inputs.mode }}" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\workflow_input.txt" -Encoding ascii
+          "github_repository=$env:GITHUB_REPOSITORY" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\runtime_context.txt" -Encoding ascii
+          "github_event_name=$env:GITHUB_EVENT_NAME" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\runtime_context.txt" -Append -Encoding ascii
+          "github_run_id=$env:GITHUB_RUN_ID" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\runtime_context.txt" -Append -Encoding ascii
+          "github_run_attempt=$env:GITHUB_RUN_ATTEMPT" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\runtime_context.txt" -Append -Encoding ascii
+          "runner_name=$env:RUNNER_NAME" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\runtime_context.txt" -Append -Encoding ascii
+          "computername=$env:COMPUTERNAME" | Out-File -FilePath "$env:RUNNER_TEMP\msrc_lab_evidence\runtime_context.txt" -Append -Encoding ascii
+
+      - name: OIDC and privilege proof
+        if: ${{ inputs.mode == 'all' || inputs.mode == 'oidc_priv' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Continue"
+          $out = "$env:RUNNER_TEMP\msrc_lab_evidence"
+          New-Item -ItemType Directory -Force -Path "$out\oidc", "$out\privilege" | Out-Null
+
+          function Decode-JwtPayload($Jwt) {
+            if ([string]::IsNullOrWhiteSpace($Jwt)) { return $null }
+            $parts = $Jwt.Split(".")
+            if ($parts.Count -lt 2) { return $null }
+            $payload = $parts[1].Replace("-", "+").Replace("_", "/")
+            switch ($payload.Length % 4) { 2 { $payload += "==" } 3 { $payload += "=" } }
+            try { return ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json) } catch { return $null }
+          }
+
+          $result = [ordered]@{
+            oidc_probe = "runtime"
+            utc = [DateTime]::UtcNow.ToString("o")
+            github_repository = $env:GITHUB_REPOSITORY
+            github_event_name = $env:GITHUB_EVENT_NAME
+            github_run_id = $env:GITHUB_RUN_ID
+            runner_name = $env:RUNNER_NAME
+            computername = $env:COMPUTERNAME
+            actions_id_token_request_url_present = [bool]$env:ACTIONS_ID_TOKEN_REQUEST_URL
+            actions_id_token_request_token_present = [bool]$env:ACTIONS_ID_TOKEN_REQUEST_TOKEN
+            oidc_http_status = $null
+            oidc_jwt_returned = $false
+            oidc_iss = $null
+            oidc_sub = $null
+            oidc_aud = $null
+            oidc_error = $null
+          }
+
+          if ($env:ACTIONS_ID_TOKEN_REQUEST_URL -and $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+            try {
+              $aud = [uri]::EscapeDataString("api://msrc-ebpf-local-runner-lab")
+              $uri = if ($env:ACTIONS_ID_TOKEN_REQUEST_URL -match "\?") { "$env:ACTIONS_ID_TOKEN_REQUEST_URL&audience=$aud" } else { "$env:ACTIONS_ID_TOKEN_REQUEST_URL?audience=$aud" }
+              $headers = @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" }
+              $response = Invoke-WebRequest -Uri $uri -Headers $headers -UseBasicParsing -Method Get
+              $result.oidc_http_status = [int]$response.StatusCode
+              $body = $response.Content | ConvertFrom-Json
+              $jwt = $body.value
+              $result.oidc_jwt_returned = [bool]$jwt
+              $payload = Decode-JwtPayload $jwt
+              if ($payload) {
+                $result.oidc_iss = $payload.iss
+                $result.oidc_sub = $payload.sub
+                if ($payload.aud -is [array]) { $result.oidc_aud = ($payload.aud -join ",") } else { $result.oidc_aud = $payload.aud }
+              }
+            } catch {
+              if ($_.Exception.Response -and $_.Exception.Response.StatusCode) { $result.oidc_http_status = [int]$_.Exception.Response.StatusCode }
+              $result.oidc_error = $_.Exception.Message
+            }
+          } else {
+            $result.oidc_error = "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN is not present."
+          }
+
+          $result | ConvertTo-Json -Depth 6 | Out-File "$out\oidc\oidc_runtime_result.json" -Encoding ascii
+          @(
+            "actions_id_token_request_url_present=$($result.actions_id_token_request_url_present)"
+            "actions_id_token_request_token_present=$($result.actions_id_token_request_token_present)"
+            "oidc_http_status=$($result.oidc_http_status)"
+            "oidc_jwt_returned=$($result.oidc_jwt_returned)"
+            "oidc_iss=$($result.oidc_iss)"
+            "oidc_sub=$($result.oidc_sub)"
+            "oidc_aud=$($result.oidc_aud)"
+            "oidc_error=$($result.oidc_error)"
+          ) | Out-File "$out\oidc\oidc_runtime_summary.txt" -Encoding ascii
+
+          whoami | Out-File "$out\privilege\whoami.txt" -Encoding ascii
+          whoami /all | Out-File "$out\privilege\whoami_all.txt" -Encoding ascii
+          whoami /groups | Out-File "$out\privilege\whoami_groups.txt" -Encoding ascii
+          whoami /priv | Out-File "$out\privilege\whoami_priv.txt" -Encoding ascii
+
+      - name: Persistence Run A write marker
+        if: ${{ inputs.mode == 'all' || inputs.mode == 'run_a' }}
+        shell: powershell
+        run: |
+          $out = "$env:RUNNER_TEMP\msrc_lab_evidence\persistence_run_a"
+          New-Item -ItemType Directory -Force -Path $out, "C:\temp" | Out-Null
+          $marker = "C:\temp\msrc_ebpf_runner_boundary_marker.txt"
+          @(
+            "marker=msrc_ebpf_cross_run_persistence_probe"
+            "phase=A_WRITE"
+            "written_utc=$([DateTime]::UtcNow.ToString('o'))"
+            "github_repository=$env:GITHUB_REPOSITORY"
+            "github_run_id=$env:GITHUB_RUN_ID"
+            "github_run_attempt=$env:GITHUB_RUN_ATTEMPT"
+            "runner_name=$env:RUNNER_NAME"
+            "computername=$env:COMPUTERNAME"
+          ) | Out-File $marker -Encoding ascii
+          @(
+            "persistence_probe=run_a"
+            "marker_path=$marker"
+            "marker_write_success=$(Test-Path $marker)"
+            "github_run_id=$env:GITHUB_RUN_ID"
+            "runner_name=$env:RUNNER_NAME"
+            "computername=$env:COMPUTERNAME"
+          ) | Out-File "$out\persistence_run_A_result.txt" -Encoding ascii
+          Get-Content "$out\persistence_run_A_result.txt"
+
+      - name: Persistence Run B read marker
+        if: ${{ inputs.mode == 'all' || inputs.mode == 'run_b' }}
+        shell: powershell
+        run: |
+          $out = "$env:RUNNER_TEMP\msrc_lab_evidence\persistence_run_b"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $marker = "C:\temp\msrc_ebpf_runner_boundary_marker.txt"
+          $exists = Test-Path $marker
+          @(
+            "persistence_probe=run_b"
+            "marker_path=$marker"
+            "marker_exists=$exists"
+            "github_run_id=$env:GITHUB_RUN_ID"
+            "runner_name=$env:RUNNER_NAME"
+            "computername=$env:COMPUTERNAME"
+            "BEGIN_MARKER_CONTENT"
+          ) | Out-File "$out\persistence_run_B_result.txt" -Encoding ascii
+          if ($exists) { Get-Content $marker | Out-File "$out\persistence_run_B_result.txt" -Append -Encoding ascii }
+          "END_MARKER_CONTENT" | Out-File "$out\persistence_run_B_result.txt" -Append -Encoding ascii
+          Get-Content "$out\persistence_run_B_result.txt"
+
+      - name: Upload lab evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: msrc-local-runner-boundary-lab-${{ inputs.mode }}
+          path: ${{ runner.temp }}\msrc_lab_evidence
+          retention-days: 14
