@@ -1,0 +1,175 @@
+name: MSRC eBPF local runner evidence lab
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'msrc-ebpf-lab-mode.txt'
+      - '.github/workflows/msrc-ebpf-local-runner-lab-push.yml'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Probe mode'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - oidc_priv
+          - run_a
+          - run_b
+
+permissions:
+  contents: read
+  id-token: write
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  local-runner-boundary-lab:
+    name: Local runner boundary lab
+    runs-on: [self-hosted, Windows, X64, msrc-ebpf-lab]
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine probe mode
+        id: mode
+        run: |
+          $mode = 'oidc_priv'
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $mode = '${{ inputs.mode }}'
+          } elseif (Test-Path '.\msrc-ebpf-lab-mode.txt') {
+            $raw = (Get-Content '.\msrc-ebpf-lab-mode.txt' -Raw).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($raw)) { $mode = $raw }
+          }
+          if ($mode -notin @('all','oidc_priv','run_a','run_b')) { throw "Invalid mode: $mode" }
+          "mode=$mode" >> $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          [ordered]@{
+            mode = $mode
+            event_name = '${{ github.event_name }}'
+            repository = '${{ github.repository }}'
+            workflow = '${{ github.workflow }}'
+            run_id = '${{ github.run_id }}'
+            run_attempt = '${{ github.run_attempt }}'
+            runner_name = '${{ runner.name }}'
+            runner_os = '${{ runner.os }}'
+            runner_arch = '${{ runner.arch }}'
+          } | ConvertTo-Json -Depth 5 | Out-File evidence\mode_context.json -Encoding utf8
+
+      - name: Runtime OIDC reachability proof
+        if: steps.mode.outputs.mode == 'oidc_priv' || steps.mode.outputs.mode == 'all'
+        run: |
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          $result = [ordered]@{
+            actions_id_token_request_url_present = -not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL)
+            actions_id_token_request_token_present = -not [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)
+            http_status = $null
+            jwt_returned = $false
+            iss = $null
+            sub = $null
+            aud = $null
+            repository = '${{ github.repository }}'
+            event_name = '${{ github.event_name }}'
+            workflow = '${{ github.workflow }}'
+            run_id = '${{ github.run_id }}'
+            runner_name = '${{ runner.name }}'
+          }
+          if ($result.actions_id_token_request_url_present -and $result.actions_id_token_request_token_present) {
+            $audience = 'api://msrc-local-runner-boundary-lab'
+            $url = "$env:ACTIONS_ID_TOKEN_REQUEST_URL&audience=$([uri]::EscapeDataString($audience))"
+            try {
+              $response = Invoke-WebRequest -Uri $url -Headers @{ Authorization = "bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } -UseBasicParsing
+              $result.http_status = [int]$response.StatusCode
+              $body = $response.Content | ConvertFrom-Json
+              $jwt = [string]$body.value
+              $result.jwt_returned = -not [string]::IsNullOrWhiteSpace($jwt)
+              if ($result.jwt_returned) {
+                $payload = $jwt.Split('.')[1].Replace('-', '+').Replace('_', '/')
+                switch ($payload.Length % 4) { 2 { $payload += '==' } 3 { $payload += '=' } 1 { throw 'Invalid base64url payload length' } }
+                $claims = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json
+                $result.iss = $claims.iss
+                $result.sub = $claims.sub
+                $result.aud = $claims.aud
+              }
+            } catch {
+              $result.http_status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 'exception' }
+              $result.error = $_.Exception.Message
+            }
+          }
+          $result | ConvertTo-Json -Depth 8 | Out-File evidence\oidc_runtime_result.json -Encoding utf8
+          @(
+            "ACTIONS_ID_TOKEN_REQUEST_URL present=$($result.actions_id_token_request_url_present)"
+            "ACTIONS_ID_TOKEN_REQUEST_TOKEN present=$($result.actions_id_token_request_token_present)"
+            "HTTP status=$($result.http_status)"
+            "JWT returned=$($result.jwt_returned)"
+            "issuer=$($result.iss)"
+            "subject=$($result.sub)"
+            "audience=$($result.aud)"
+          ) | Out-File evidence\oidc_runtime_summary.txt -Encoding utf8
+
+      - name: Privilege and runner identity proof
+        if: steps.mode.outputs.mode == 'oidc_priv' || steps.mode.outputs.mode == 'all'
+        run: |
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          whoami | Out-File evidence\whoami.txt -Encoding utf8
+          whoami /all | Out-File evidence\whoami_all.txt -Encoding utf8
+          whoami /groups | Out-File evidence\whoami_groups.txt -Encoding utf8
+          whoami /priv | Out-File evidence\whoami_priv.txt -Encoding utf8
+          hostname | Out-File evidence\hostname.txt -Encoding utf8
+          Get-ComputerInfo | Select-Object CsName,OsName,OsVersion,WindowsProductName,WindowsVersion,CsDomain,CsPartOfDomain | ConvertTo-Json -Depth 5 | Out-File evidence\computer_info.json -Encoding utf8
+          Get-ChildItem env: | Where-Object { $_.Name -match '^(GITHUB_|RUNNER_|ACTIONS_)' } | ForEach-Object {
+            if ($_.Name -match 'TOKEN|SECRET|PASSWORD|KEY') { '{0}=<redacted-present:{1}>' -f $_.Name, (-not [string]::IsNullOrWhiteSpace($_.Value)) }
+            else { '{0}={1}' -f $_.Name, $_.Value }
+          } | Sort-Object | Out-File evidence\github_runner_env_redacted.txt -Encoding utf8
+
+      - name: Persistence Run A write marker
+        if: steps.mode.outputs.mode == 'run_a' || steps.mode.outputs.mode == 'all'
+        run: |
+          New-Item -ItemType Directory -Force -Path C:\temp | Out-Null
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          $marker = 'C:\temp\msrc_ebpf_runner_boundary_marker.txt'
+          $payload = [ordered]@{
+            marker = 'MSRC_EBPF_LOCAL_RUNNER_MARKER'
+            written_utc = (Get-Date).ToUniversalTime().ToString('o')
+            repository = '${{ github.repository }}'
+            workflow = '${{ github.workflow }}'
+            run_id = '${{ github.run_id }}'
+            run_attempt = '${{ github.run_attempt }}'
+            runner_name = '${{ runner.name }}'
+            hostname = hostname
+          }
+          $payload | ConvertTo-Json -Depth 5 | Out-File $marker -Encoding utf8
+          Copy-Item $marker evidence\persistence_run_a_marker_written.txt -Force
+          [ordered]@{ marker_path = $marker; marker_exists_after_write = (Test-Path $marker); run_id = '${{ github.run_id }}' } | ConvertTo-Json -Depth 5 | Out-File evidence\persistence_run_a_result.json -Encoding utf8
+
+      - name: Persistence Run B read marker
+        if: steps.mode.outputs.mode == 'run_b' || steps.mode.outputs.mode == 'all'
+        run: |
+          New-Item -ItemType Directory -Force -Path evidence | Out-Null
+          $marker = 'C:\temp\msrc_ebpf_runner_boundary_marker.txt'
+          $exists = Test-Path $marker
+          $content = if ($exists) { Get-Content $marker -Raw } else { $null }
+          if ($exists) { $content | Out-File evidence\persistence_run_b_marker_read.txt -Encoding utf8 }
+          [ordered]@{
+            marker_path = $marker
+            marker_exists = $exists
+            marker_content_sha256 = if ($exists) { (Get-FileHash $marker -Algorithm SHA256).Hash } else { $null }
+            marker_content = $content
+            current_run_id = '${{ github.run_id }}'
+            runner_name = '${{ runner.name }}'
+            hostname = hostname
+          } | ConvertTo-Json -Depth 8 | Out-File evidence\persistence_run_b_result.json -Encoding utf8
+          if (-not $exists) { Write-Warning "Persistence marker not found. This indicates no cross-run persistence for this local runner state." }
+
+      - name: Upload evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msrc-local-runner-boundary-lab-${{ steps.mode.outputs.mode }}
+          path: evidence/
+          if-no-files-found: error
