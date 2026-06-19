@@ -1,0 +1,40 @@
+name: MSRC TFMT Consumer
+
+on:
+  workflow_run:
+    workflows: ["MSRC TFMT Producer"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  plan-comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download workflow artifact
+        uses: dawidd6/action-download-artifact@246dbf436b23d7c49e21a7ab8204ca9ecd1fe615
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: msrc-tfmt-producer.yml
+          run_id: ${{ github.event.workflow_run.id }}
+
+      - name: Read the pr_num file
+        id: pr_num_reader
+        uses: juliangruber/read-file-action@02bbba9876a8f870efd4ad64e3b9088d3fb94d4b
+        with:
+          path: ./pr_num/pr_num.txt
+
+      - name: Remove new line characters
+        run: echo "PR_NUM=$(echo '${{ steps.pr_num_reader.outputs.content }}' | tr -d '\n')" >> $GITHUB_ENV
+
+      - name: Trusted context placeholder after artifact parse
+        run: |
+          echo "consumer_workflow=${GITHUB_WORKFLOW}"
+          echo "consumer_event=${GITHUB_EVENT_NAME}"
+          echo "consumer_actor=${GITHUB_ACTOR}"
+          echo "consumer_oidc_url_present=${ACTIONS_ID_TOKEN_REQUEST_URL:+true}"
+          echo "consumer_pr_num=${PR_NUM}"
