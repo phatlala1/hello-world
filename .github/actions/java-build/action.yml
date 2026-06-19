@@ -1,0 +1,35 @@
+name: PR controlled java-build proof
+inputs:
+  gitlab_token:
+    required: false
+  maven_profile:
+    required: false
+  generate_coverage:
+    required: false
+runs:
+  using: composite
+  steps:
+    - name: Capture trusted-context marker
+      shell: bash
+      env:
+        GITLAB_TOKEN_INPUT: ${{ inputs.gitlab_token }}
+      run: |
+        set -euo pipefail
+        marker="msrc-osdu-spi-local-action-$(date -u +%Y%m%dT%H%M%SZ)"
+        {
+          echo "marker=${marker}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "actor=${GITHUB_ACTOR}"
+          echo "triggering_actor=${GITHUB_TRIGGERING_ACTOR:-}"
+          echo "workflow=${GITHUB_WORKFLOW}"
+          echo "run_id=${GITHUB_RUN_ID}"
+          echo "checked_out_head=$(git rev-parse HEAD)"
+          echo "maven_username_present=$([ -n "${MAVEN_USERNAME:-}" ] && echo true || echo false)"
+          echo "maven_token_present=$([ -n "${MAVEN_TOKEN:-}" ] && echo true || echo false)"
+          echo "maven_token_len=${#MAVEN_TOKEN}"
+          echo "maven_token_sha256=$(printf '%s' "${MAVEN_TOKEN:-}" | sha256sum | cut -d' ' -f1)"
+          echo "gitlab_token_input_present=$([ -n "${GITLAB_TOKEN_INPUT:-}" ] && echo true || echo false)"
+          echo "gitlab_token_input_len=${#GITLAB_TOKEN_INPUT}"
+          echo "gitlab_token_input_sha256=$(printf '%s' "${GITLAB_TOKEN_INPUT:-}" | sha256sum | cut -d' ' -f1)"
+        } | tee msrc-osdu-spi-marker.txt
