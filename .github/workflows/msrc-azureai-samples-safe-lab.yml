@@ -1,0 +1,62 @@
+name: MSRC AzureAI Safe Lab
+
+on:
+  pull_request_target:
+    branches:
+      - master
+    paths:
+      - 'scenarios/**'
+      - 'conftest.py'
+      - 'dev-requirements.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+jobs:
+  run-samples:
+    name: run-samples safe lab
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trusted workflow context before PR checkout
+        run: |
+          echo "LAB_JOB=run-samples"
+          echo "GITHUB_WORKFLOW=$GITHUB_WORKFLOW"
+          echo "GITHUB_EVENT_NAME=$GITHUB_EVENT_NAME"
+          echo "GITHUB_ACTOR=$GITHUB_ACTOR"
+          echo "GITHUB_TRIGGERING_ACTOR=$GITHUB_TRIGGERING_ACTOR"
+          echo "OIDC_URL_PRESENT=${ACTIONS_ID_TOKEN_REQUEST_URL:+true}"
+          echo "OIDC_TOKEN_PRESENT=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+true}"
+      - name: Checkout base repository
+        uses: actions/checkout@v4
+      - name: Checkout PR head like Azure-Samples workflow
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checkout current ref for manual dispatch
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@v4
+      - name: Show checked-out source
+        run: |
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          echo "PR_HEAD_SHA=${{ github.event.pull_request.head.sha || '' }}"
+          echo "PR_BASE_SHA=${{ github.event.pull_request.base.sha || '' }}"
+          git status --short
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pytest only
+        run: python -m pip install pytest
+      - name: Execute pytest from PR-controlled checkout
+        run: python -m pytest scenarios -s
+      - name: Print redacted marker from PR-controlled pytest code
+        if: always()
+        run: |
+          if [ -f msrc_safe_marker.json ]; then
+            cat msrc_safe_marker.json
+          else
+            echo "marker_present=false"
+          fi
