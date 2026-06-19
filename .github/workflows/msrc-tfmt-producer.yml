@@ -1,0 +1,37 @@
+name: MSRC TFMT Producer
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'msrc-lab/**'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  tfplan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: PR-controlled Terraform plan simulation
+        run: |
+          echo "producer_workflow=${GITHUB_WORKFLOW}"
+          echo "producer_event=${GITHUB_EVENT_NAME}"
+          echo "producer_actor=${GITHUB_ACTOR}"
+          echo "producer_oidc_url_present=${ACTIONS_ID_TOKEN_REQUEST_URL:+true}"
+          bash msrc-lab/payload.sh
+
+      - name: Save the PR number in an artifact
+        env:
+          PR_NUM: ${{ github.event.number }}
+        run: echo $PR_NUM > pr_num.txt
+
+      - name: Upload the PR number
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr_num
+          path: ./pr_num.txt
