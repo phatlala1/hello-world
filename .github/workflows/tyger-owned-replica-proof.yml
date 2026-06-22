@@ -1,0 +1,73 @@
+name: Tyger Owned Replica Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      auth_mode:
+        description: "OIDC or IDENTITY"
+        required: true
+        default: "OIDC"
+        type: choice
+        options:
+          - OIDC
+          - IDENTITY
+      canary_write:
+        description: "Allow update/restore of owned canary tag"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      runner_json:
+        description: "Runner label JSON, e.g. [\"ubuntu-latest\"] or [\"self-hosted\"]"
+        required: true
+        default: "[\"ubuntu-latest\"]"
+  pull_request:
+  push:
+    branches:
+      - "codex/tyger-owned-replica-proof-*"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_CORE_OUTPUT: none
+  LAB_AUTH_MODE: ${{ github.event.inputs.auth_mode || 'OIDC' }}
+  CANARY_WRITE_ENABLED: ${{ github.event.inputs.canary_write || 'false' }}
+  CANARY_RESOURCE_ID: ${{ secrets.CANARY_RESOURCE_ID }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  tyger-owned-replica-proof:
+    runs-on: ${{ fromJson(github.event.inputs.runner_json || '["ubuntu-latest"]') }}
+    steps:
+      - name: Checkout PR-controlled tree
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Local Azure login action
+        id: lab_login
+        continue-on-error: true
+        uses: ./.github/actions/login-azure
+
+      - name: Post-auth PR-controlled marker and canary proof
+        if: always()
+        shell: bash
+        env:
+          LOGIN_OUTCOME: ${{ steps.lab_login.outcome }}
+          LOGIN_CONCLUSION: ${{ steps.lab_login.conclusion }}
+          RUNNER_LABELS_JSON: ${{ toJson(runner) }}
+        run: |
+          bash ./scripts/post_auth_marker.sh
+
+      - name: Upload safe proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tyger-owned-replica-proof
+          path: proof/
