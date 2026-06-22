@@ -35,11 +35,11 @@ permissions:
 env:
   AZURE_CORE_OUTPUT: none
   LAB_AUTH_MODE: ${{ github.event.inputs.auth_mode || 'OIDC' }}
-  CANARY_WRITE_ENABLED: ${{ github.event.inputs.canary_write || 'false' }}
-  CANARY_RESOURCE_ID: ${{ secrets.CANARY_RESOURCE_ID }}
-  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+  CANARY_WRITE_ENABLED: ${{ github.event.inputs.canary_write || 'true' }}
+  CANARY_RESOURCE_ID: /subscriptions/9de67d4a-bbc5-4003-b2aa-8f4579a277df/resourceGroups/msrc-tyger-oidc-canary-20260622
+  AZURE_CLIENT_ID: 4bc39489-e4f7-4084-aad2-87e9c4c4ab50
+  AZURE_TENANT_ID: fbd5a907-f158-45ed-a279-fba70ffc9055
+  AZURE_SUBSCRIPTION_ID: 9de67d4a-bbc5-4003-b2aa-8f4579a277df
 
 jobs:
   tyger-owned-replica-proof:
