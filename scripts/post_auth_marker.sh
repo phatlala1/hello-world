@@ -129,7 +129,8 @@ if [[ "$rg_canary" == "true" ]]; then
 else
   az resource show --ids "$CANARY_RESOURCE_ID" --query 'tags' -o json > proof/restored-tags.json
 fi
-restored_hash="$(hash_value "$(cat proof/restored-tags.json)")"
+restored_compact="$(jq -c '.' proof/restored-tags.json)"
+restored_hash="$(hash_value "$restored_compact")"
 original_hash="$(hash_value "$original_tags")"
 
 if [[ "$restored_hash" == "$original_hash" ]]; then
