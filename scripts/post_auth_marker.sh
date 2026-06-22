@@ -5,6 +5,8 @@ mkdir -p proof
 proof_file="proof/owned-replica-proof.txt"
 account_json="proof/account-redacted.json"
 canary_json="proof/canary-redacted.json"
+rg_canary="false"
+rg_name=""
 
 hash_value() {
   local value="${1:-}"
@@ -71,7 +73,16 @@ fi
 resource_hash="$(hash_value "$CANARY_RESOURCE_ID")"
 echo "canary_resource_hash=sha256:${resource_hash}" >> "$proof_file"
 
-if az resource show --ids "$CANARY_RESOURCE_ID" --query '{id:id,type:type,tags:tags}' -o json > "$canary_json"; then
+if [[ "$CANARY_RESOURCE_ID" =~ /resourceGroups/([^/]+)$ ]]; then
+  rg_canary="true"
+  rg_name="${BASH_REMATCH[1]}"
+fi
+
+if [[ "$rg_canary" == "true" ]] && az group show --name "$rg_name" --query '{id:id,type:type,tags:tags}' -o json > "$canary_json"; then
+  canary_type="Microsoft.Resources/resourceGroups"
+  echo "canary_read_success=true" >> "$proof_file"
+  echo "canary_resource_type=${canary_type}" >> "$proof_file"
+elif az resource show --ids "$CANARY_RESOURCE_ID" --query '{id:id,type:type,tags:tags}' -o json > "$canary_json"; then
   canary_type="$(jq -r '.type // "unknown"' "$canary_json")"
   echo "canary_read_success=true" >> "$proof_file"
   echo "canary_resource_type=${canary_type}" >> "$proof_file"
@@ -89,19 +100,35 @@ fi
 original_tags="$(jq -c '.tags // {}' "$canary_json")"
 marker_value="owned-replica-${GITHUB_RUN_ID:-unknown}-${GITHUB_RUN_ATTEMPT:-0}"
 
-az resource tag --ids "$CANARY_RESOURCE_ID" --tags msrc-owned-replica="$marker_value" --output none
+if [[ "$rg_canary" == "true" ]]; then
+  az group update --name "$rg_name" --set tags.msrc-owned-replica="$marker_value" --output none
+else
+  az resource tag --ids "$CANARY_RESOURCE_ID" --tags msrc-owned-replica="$marker_value" --output none
+fi
 echo "canary_write_attempted=true" >> "$proof_file"
 echo "canary_write_success=true" >> "$proof_file"
 
 if [[ "$original_tags" == "{}" ]]; then
-  az resource tag --ids "$CANARY_RESOURCE_ID" --tags '{}' --output none
+  if [[ "$rg_canary" == "true" ]]; then
+    az group update --name "$rg_name" --set tags={} --output none
+  else
+    az resource tag --ids "$CANARY_RESOURCE_ID" --tags '{}' --output none
+  fi
 else
   tmp_tags="proof/original-tags.json"
   printf '%s' "$original_tags" > "$tmp_tags"
-  az resource tag --ids "$CANARY_RESOURCE_ID" --tags @"$tmp_tags" --output none
+  if [[ "$rg_canary" == "true" ]]; then
+    az group update --name "$rg_name" --set tags=@"$tmp_tags" --output none
+  else
+    az resource tag --ids "$CANARY_RESOURCE_ID" --tags @"$tmp_tags" --output none
+  fi
 fi
 
-az resource show --ids "$CANARY_RESOURCE_ID" --query 'tags' -o json > proof/restored-tags.json
+if [[ "$rg_canary" == "true" ]]; then
+  az group show --name "$rg_name" --query 'tags' -o json > proof/restored-tags.json
+else
+  az resource show --ids "$CANARY_RESOURCE_ID" --query 'tags' -o json > proof/restored-tags.json
+fi
 restored_hash="$(hash_value "$(cat proof/restored-tags.json)")"
 original_hash="$(hash_value "$original_tags")"
 
