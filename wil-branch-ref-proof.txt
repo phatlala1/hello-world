@@ -1,0 +1,2 @@
+GitHub accepted a branch named poc&echo.WIL for MSRC WIL workflow command-injection evidence.
+No exploit was run.
