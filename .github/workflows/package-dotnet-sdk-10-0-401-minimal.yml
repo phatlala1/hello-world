@@ -1,0 +1,64 @@
+name: package-dotnet-sdk-10-0-401-minimal
+
+on:
+  push:
+    branches:
+      - actions-runner-probe-20260921
+    paths:
+      - .github/workflows/package-dotnet-sdk-10-0-401-minimal.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Install exact SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Freeze minimal exact SDK tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(dotnet --version)" = '10.0.401'
+          root="$(dirname "$(readlink -f "$(command -v dotnet)")")"
+          runtime="$(dotnet --list-runtimes | awk '$1=="Microsoft.NETCore.App" && $2 ~ /^10[.]/ {print $2}' | sort -V | tail -1)"
+          aspnet="$(dotnet --list-runtimes | awk '$1=="Microsoft.AspNetCore.App" && $2 ~ /^10[.]/ {print $2}' | sort -V | tail -1)"
+          test -n "$runtime"
+          test -n "$aspnet"
+          printf 'root=%s\nruntime=%s\naspnet=%s\n' "$root" "$runtime" "$aspnet" | tee dotnet-selection.txt
+          dotnet --info > dotnet-info.txt
+          items=(
+            dotnet
+            host/fxr/"$runtime"
+            sdk/10.0.401
+            shared/Microsoft.NETCore.App/"$runtime"
+            shared/Microsoft.AspNetCore.App/"$aspnet"
+            packs/Microsoft.NETCore.App.Ref/"$runtime"
+            packs/Microsoft.AspNetCore.App.Ref/"$aspnet"
+          )
+          [[ -d "$root/packs/Microsoft.NETCore.App.Host.linux-x64/$runtime" ]] && items+=(packs/Microsoft.NETCore.App.Host.linux-x64/"$runtime")
+          [[ -d "$root/sdk-manifests/10.0.100" ]] && items+=(sdk-manifests/10.0.100)
+          [[ -f "$root/LICENSE.txt" ]] && items+=(LICENSE.txt)
+          [[ -f "$root/ThirdPartyNotices.txt" ]] && items+=(ThirdPartyNotices.txt)
+          tar --numeric-owner --owner=0 --group=0 -C "$root" -czf dotnet-sdk-10.0.401-linux-x64-minimal.tar.gz "${items[@]}"
+          sha256sum dotnet-sdk-10.0.401-linux-x64-minimal.tar.gz > dotnet-sdk-10.0.401-linux-x64-minimal.tar.gz.sha256
+          ls -lh dotnet-sdk-10.0.401-linux-x64-minimal.tar.gz
+
+      - name: Upload minimal exact SDK archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-sdk-10.0.401-linux-x64-minimal
+          path: |
+            dotnet-sdk-10.0.401-linux-x64-minimal.tar.gz
+            dotnet-sdk-10.0.401-linux-x64-minimal.tar.gz.sha256
+            dotnet-info.txt
+            dotnet-selection.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
