@@ -1,0 +1,52 @@
+name: export-dotnet-sdk-10.0.401
+
+on:
+  push:
+    branches:
+      - research/dotnet-sdk-export-20260921
+    paths:
+      - .github/workflows/export-dotnet-sdk-10.0.401.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install exact official SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Verify and package SDK root
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(dotnet --version)" = "10.0.401"
+          dotnet --info | tee dotnet-info.txt
+          root="${DOTNET_ROOT:-$(dirname "$(readlink -f "$(command -v dotnet)")")}" 
+          test -x "$root/dotnet"
+          printf '%s\n' "$root" | tee dotnet-root.txt
+          sha512sum "$root/dotnet" > dotnet-host.sha512
+          tar --numeric-owner --owner=0 --group=0 \
+            -C "$root" -czf dotnet-sdk-10.0.401-linux-x64-offline.tar.gz .
+          sha512sum dotnet-sdk-10.0.401-linux-x64-offline.tar.gz > dotnet-sdk-10.0.401-linux-x64-offline.tar.gz.sha512
+          ls -lh dotnet-sdk-10.0.401-linux-x64-offline.tar.gz
+
+      - name: Upload offline SDK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-sdk-10.0.401-linux-x64-offline
+          path: |
+            dotnet-sdk-10.0.401-linux-x64-offline.tar.gz
+            dotnet-sdk-10.0.401-linux-x64-offline.tar.gz.sha512
+            dotnet-host.sha512
+            dotnet-info.txt
+            dotnet-root.txt
+          if-no-files-found: error
+          retention-days: 1
