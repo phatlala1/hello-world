@@ -1,0 +1,46 @@
+name: export-dotnet-sdk-official-tar
+
+on:
+  push:
+    branches:
+      - research/dotnet-sdk-export-20260921
+    paths:
+      - .github/workflows/export-dotnet-sdk-official-tar.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download and verify official SDK tarball
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          url='https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.401/dotnet-sdk-10.0.401-linux-x64.tar.gz'
+          expected='51c8b999af9e8dd9998c9edc5944e19a90788862068acd38694e098889054ce8c23d4f0c5cccfa16bf187d044562359e5ee69a9f8ad0bbe913ba90311fbce25b'
+          curl --fail --location --retry 5 --retry-delay 2 \
+            --output dotnet-sdk-10.0.401-linux-x64.tar.gz "$url"
+          actual="$(sha512sum dotnet-sdk-10.0.401-linux-x64.tar.gz | awk '{print $1}')"
+          test "$actual" = "$expected"
+          printf '%s  %s\n' "$actual" dotnet-sdk-10.0.401-linux-x64.tar.gz \
+            > dotnet-sdk-10.0.401-linux-x64.tar.gz.sha512
+          printf 'source=%s\nsha512=%s\n' "$url" "$actual" > PROVENANCE.txt
+          ls -lh dotnet-sdk-10.0.401-linux-x64.tar.gz
+
+      - name: Upload official SDK tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-sdk-10.0.401-linux-x64-official-tar
+          path: |
+            dotnet-sdk-10.0.401-linux-x64.tar.gz
+            dotnet-sdk-10.0.401-linux-x64.tar.gz.sha512
+            PROVENANCE.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
