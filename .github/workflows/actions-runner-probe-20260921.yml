@@ -1,0 +1,23 @@
+name: actions-runner-probe-20260921
+
+on:
+  push:
+    branches:
+      - actions-runner-probe-20260921
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Record runner availability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'RUNNER_OK\n'
+          uname -a
+          dotnet --version || true
